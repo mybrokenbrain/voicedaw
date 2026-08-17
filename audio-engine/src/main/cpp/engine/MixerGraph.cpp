@@ -1,3 +1,7 @@
+/**
+ * MixerGraph.cpp — Audio summing engine, track processing, and FX bus routing.
+ */
+
 #include "MixerGraph.h"
 #include <cstring>
 #include <cmath>
@@ -10,6 +14,7 @@
 namespace voicedaw {
 
 MixerGraph::MixerGraph() {
+    // No hello-world tones in M4 — instrument is driven by MIDI/piano roll taps.
 }
 
 void MixerGraph::configure(int32_t sampleRate, int32_t channelCount) {
@@ -27,6 +32,9 @@ void MixerGraph::configure(int32_t sampleRate, int32_t channelCount) {
     mReverb.configure(sampleRate);
     mReverb.setEnabled(true);
 
+    // M7: (re)construct sample-rate-dependent FX now that the real device
+    // sample rate is known. Safe to allocate here — configure() runs on the
+    // main thread before the stream starts (see A-02).
     mMasterDelay = std::make_unique<fx::Delay>(sampleRate);
     mMasterGate = std::make_unique<fx::NoiseGate>(sampleRate);
 
@@ -37,6 +45,8 @@ void MixerGraph::configure(int32_t sampleRate, int32_t channelCount) {
     LOGI("MixerGraph configured: sampleRate=%d, channels=%d, voices=%d",
          sampleRate, channelCount, kMaxVoices);
 }
+
+// ── Called from main thread (JNI) ────────────────────────────────────────────
 
 void MixerGraph::postNoteEvent(int32_t midiNote, int32_t velocity) {
     NoteEvent ev{midiNote, velocity, false, 0.0f};
@@ -88,6 +98,8 @@ void MixerGraph::loadReferenceTrack(const std::string& path) {
     mReferencePlayer.loadWavFile(path);
 }
 
+// ── Audio thread ─────────────────────────────────────────────────────────────
+
 void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelCount) {
     if (!mConfigured) {
         std::memset(outputBuffer, 0, sizeof(float) * numFrames * channelCount);
@@ -109,6 +121,9 @@ void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelC
         if (mTracks[i].isSoloed()) { anySoloed = true; break; }
     }
 
+    // ── Phase 1: render every track's source signal + pre-compressor chain ──
+    // Must complete for ALL tracks before phase 2 so sidechain sources are
+    // available regardless of track index order.
     for (int t = 0; t < kMaxTracks; ++t) {
         float* trackBuf = mPreCompBuffers[t];
         std::memset(trackBuf, 0, sizeof(float) * numFrames * channelCount);
@@ -121,7 +136,7 @@ void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelC
             }
             for (auto& drum : mDrumVoices) {
                 if (!drum.isActive()) continue;
-                drum.render(mScratchBuffer, numFrames, 1); 
+                drum.render(mScratchBuffer, numFrames, 1); // mono scratch buffer
             }
         }
 
@@ -135,6 +150,7 @@ void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelC
         mTracks[t].renderPreComp(trackBuf, numFrames, anySoloed);
     }
 
+    // ── Phase 2: compression (with correct sidechain source) + bus routing ──
     for (int t = 0; t < kMaxTracks; ++t) {
         float* trackBuf = mPreCompBuffers[t];
 
@@ -142,6 +158,10 @@ void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelC
         if (mTracks[t].isSidechainEnabled()) {
             int32_t scSource = mTracks[t].getSidechainSource();
             if (scSource >= 0 && scSource < kMaxTracks && scSource != t) {
+                // Correct: this is the source track's own isolated phase-1
+                // buffer, not the partially-summed master mix, and it's
+                // guaranteed to be rendered already since phase 1 finished
+                // for every track before phase 2 started.
                 sidechainBuffer = mPreCompBuffers[scSource];
             }
         }
@@ -189,9 +209,11 @@ void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelC
         }
     }
 
+    // Performance FX Rack
     mPerformanceFx.process(outputBuffer, numFrames, channelCount);
 
-    // Master Bus FX
+    // ── M7: Master bus FX chain — post-reverb-sum, pre-mastering ─────────────
+    // Order: Saturation (tone shaping) -> Gate (cleanup).
     if (mMasterSaturationEnabled) {
         mMasterSaturation.process(outputBuffer, numFrames * channelCount);
     }
@@ -199,7 +221,7 @@ void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelC
         mMasterGate->process(outputBuffer, numFrames * channelCount);
     }
 
-    // Phase 3
+    // ── Phase 3: Mastering & Reference Track ─────────────────────────────────
     if (mMastering) {
         float stereoRef[kMaxFramesPerCallback * 2] = {0};
         if (mReferencePlayer.isLoaded()) {
@@ -225,7 +247,7 @@ void MixerGraph::render(float* outputBuffer, int32_t numFrames, int32_t channelC
     }
 }
 
-// Offline Export
+// ── Offline Export ────────────────────────────────────────────────────────────
 
 int64_t MixerGraph::getLongestClipFrames() const {
     int64_t maxFrames = 0;
@@ -241,7 +263,7 @@ void MixerGraph::resetForOfflineRender() {
     mTransport.setState(TransportClock::State::Playing);
 }
 
-// Private
+// ── Private ───────────────────────────────────────────────────────────────────
 
 void MixerGraph::drainNoteQueue() {
     NoteEvent ev;
@@ -254,7 +276,8 @@ void MixerGraph::drainNoteQueue() {
             }
         } else if (ev.velocity > 0) {
             if (ev.midiNote >= 36 && ev.midiNote <= 38) {
-                        DrumVoice* d = allocDrumVoice(ev.midiNote);
+                // Drum note range — route to DrumVoice pool, not the synth pool.
+                DrumVoice* d = allocDrumVoice(ev.midiNote);
                 if (d) d->noteOn(ev.midiNote, ev.velocity);
             } else {
                 SynthVoice* v = allocVoice(ev.midiNote);

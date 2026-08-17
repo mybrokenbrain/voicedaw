@@ -31,7 +31,7 @@ public:
         if (flux > 0.05f && flux > (mSmoothedFlux * mThreshold) && !mInCooldown) {
             isOnset = true;
             mInCooldown = true;
-            mFramesSinceOnset = 0;
+            mCooldownCounter = 5;
         }
 
         if (mInCooldown) {

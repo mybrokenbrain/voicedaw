@@ -46,10 +46,7 @@ class VoiceCaptureStateMachine(
     fun processFrame(pitchHz: Float, amp: Float): List<CapturedNote>? {
         wallClockMs += pollIntervalMs
 
-        // FIXED 2026-07-28: Reject invalid pitch markers from native detector.
-        // YinPitchTracker now returns -1.0f for unvoiced/silent/out-of-range frames
-        // instead of garbage values that would map to wrong MIDI notes. Check this
-        // FIRST before attempting frequency-to-MIDI conversion.
+        // Reject invalid / unvoiced pitch frames (-1.0f from pitch tracker)
         if (pitchHz < 0.0f) {
             return handleSilence()
         }

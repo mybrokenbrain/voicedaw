@@ -83,7 +83,7 @@ object AudioEngineJni {
     @JvmStatic external fun nativeStart(handle: Long): Boolean
     @JvmStatic external fun nativeStop(handle: Long)
 
-    // Vocal Pad Grid
+    // ── Vocal Pad Grid ───────────────────────────────────────────────────────
     @JvmStatic external fun nativeLoadPadSample(handle: Long, padIndex: Int, path: String): Boolean
     @JvmStatic external fun nativeConfigurePad(handle: Long, padIndex: Int, startMs: Float, endMs: Float, pitchSemitones: Int, fineTuneCents: Int, gainDb: Float, fadeInMs: Float, fadeOutMs: Float, reverse: Boolean, playbackMode: Int, chokeGroup: Int)
     @JvmStatic external fun nativeTriggerPad(handle: Long, padIndex: Int, velocity: Float, extraSemitones: Int)

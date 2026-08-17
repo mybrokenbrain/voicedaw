@@ -45,14 +45,26 @@ class VocalPadManager(private val context: Context?) {
         }
     }
 
+    /**
+     * Peak-normalizes a pad to -0.5 dBFS based on the maximum absolute sample in its audio file.
+     * If no sample file is loaded, resets gainDb to 0 dB.
+     */
     fun normalizePad(padIndex: Int) {
         if (padIndex !in 0..15) return
         val currentPads = _pads.value.toMutableList()
         val pad = currentPads.getOrNull(padIndex) ?: return
-        if (pad.samplePath.isEmpty()) return
+        if (pad.samplePath.isEmpty()) {
+            currentPads[padIndex] = pad.copy(gainDb = 0f)
+            _pads.value = currentPads
+            return
+        }
 
-        val peak = readWavPeakAbs(pad.samplePath) ?: return
-        if (peak <= 0.0001f) return
+        val peak = readWavPeakAbs(pad.samplePath)
+        if (peak == null || peak <= 0.0001f) {
+            currentPads[padIndex] = pad.copy(gainDb = 0f)
+            _pads.value = currentPads
+            return
+        }
 
         val targetPeak = 0.944f // -0.5 dBFS
         val gainLinear = targetPeak / peak
@@ -63,6 +75,7 @@ class VocalPadManager(private val context: Context?) {
         _pads.value = currentPads
     }
 
+    /** Scans a 16-bit PCM WAV file's data chunk and returns the peak absolute sample value, 0..1. */
     private fun readWavPeakAbs(path: String): Float? {
         val file = File(path)
         if (!file.exists()) return null
@@ -107,6 +120,7 @@ class VocalPadManager(private val context: Context?) {
         if (padIndex !in 0..15) return
         val pad = _pads.value.getOrNull(padIndex) ?: return
         
+        // Choke group logic: if pad belongs to a choke group (1..8), stop all other active pads in the same choke group
         if (pad.chokeGroup > 0) {
             val toChoke = _pads.value.filter { it.padIndex != padIndex && it.chokeGroup == pad.chokeGroup }
             for (chokedPad in toChoke) {

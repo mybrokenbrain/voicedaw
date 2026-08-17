@@ -22,6 +22,18 @@ data class SeparatedStems(
     val otherPath: String
 )
 
+/**
+ * StemSeparator — 4-way stem separation using mid/side decomposition and multiband filtering.
+ *
+ * Algorithm:
+ *  - Mid = (L+R)/2, Side = (L-R)/2.
+ *  - Vocals: Mid channel filtered with a bandpass (~300 Hz – 3.4 kHz) corresponding to the vocal formant range.
+ *  - Bass: Mid channel low-passed below ~150 Hz.
+ *  - Drums: Mid channel high-passed above ~150 Hz.
+ *  - Other (Instruments): Side channel (stereo difference) routed to both channels.
+ *
+ * Supports 16-bit PCM WAV format.
+ */
 class StemSeparator(private val context: Context?) {
 
     fun separateStems(inputAudioPath: String): SeparatedStems? {
@@ -61,7 +73,9 @@ class StemSeparator(private val context: Context?) {
         )
     }
 
-    // Simple one-pole filters
+    // ── Simple one-pole filters (real-time-style, single pass is fine for
+    //    this offline use — no need for the zero-phase filtering a proper
+    //    DSP tool would use) ──────────────────────────────────────────────
 
     private fun lowPass(input: FloatArray, sampleRate: Float, cutoffHz: Float): FloatArray {
         val alpha = computeAlpha(sampleRate, cutoffHz)
@@ -87,7 +101,7 @@ class StemSeparator(private val context: Context?) {
         return (dt / (rc + dt)).toFloat()
     }
 
-    // WAV read/write
+    // ── Minimal 16-bit PCM stereo WAV read/write ─────────────────────────────
 
     private data class StereoWav(val left: FloatArray, val right: FloatArray, val sampleRate: Int)
 

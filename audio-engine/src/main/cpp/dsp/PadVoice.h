@@ -1,4 +1,16 @@
 #pragma once
+/**
+ * PadVoice.h — single-pad sampler voice.
+ *
+ * Threading (A-03):
+ *  - loadWav() and setParams() are main-thread only, updating playback
+ *    parameters safely via atomics.
+ *  - trigger(), release(), choke(), and render() run exclusively on the
+ *    audio thread via PadPlayerPool event dispatch.
+ *
+ * Audio Format:
+ *  - 16-bit PCM WAV (mono or stereo).
+ */
 
 #include <atomic>
 #include <cmath>
@@ -26,6 +38,7 @@ public:
         mEngineSampleRate = engineSampleRate;
     }
 
+    /** Main thread only. Returns false (pad left silent) on any parse/format failure. */
     bool loadWav(const std::string& path) {
         FILE* f = fopen(path.c_str(), "rb");
         if (!f) {
@@ -35,7 +48,7 @@ public:
 
         char riff[4]{};
         if (fread(riff, 1, 4, f) != 4 || memcmp(riff, "RIFF", 4) != 0) { fclose(f); return false; }
-        fseek(f, 4, SEEK_CUR);
+        fseek(f, 4, SEEK_CUR); // RIFF chunk size, unused
         char wave[4]{};
         if (fread(wave, 1, 4, f) != 4 || memcmp(wave, "WAVE", 4) != 0) { fclose(f); return false; }
 
@@ -57,7 +70,7 @@ public:
                 fread(&audioFormat, 2, 1, f);
                 fread(&numChannels, 2, 1, f);
                 fread(&fileSampleRate, 4, 1, f);
-                fseek(f, 6, SEEK_CUR);
+                fseek(f, 6, SEEK_CUR); // byteRate(4) + blockAlign(2), unused
                 fread(&bitsPerSample, 2, 1, f);
                 long remaining = static_cast<long>(chunkSize) - 16;
                 if (remaining > 0) fseek(f, remaining, SEEK_CUR);
@@ -103,7 +116,7 @@ public:
 
         mFileSampleRate = fileSampleRate;
         mTotalFrames = numFrames;
-        mBufferHolder = buf;
+        mBufferHolder = buf; // keeps memory alive for the lifetime of the pointer below
         mBuffer.store(buf->data(), std::memory_order_release);
         mLoaded.store(true, std::memory_order_release);
         return true;
@@ -113,6 +126,7 @@ public:
     int32_t getChokeGroup() const { return mChokeGroup.load(std::memory_order_relaxed); }
     bool isActive() const { return mActive.load(std::memory_order_relaxed); }
 
+    /** Main thread. Atomic — safe to call anytime, independent of trigger state. */
     void setParams(float startMs, float endMs, int32_t pitchSemitones, int32_t fineTuneCents,
                     float gainDb, float fadeInMs, float fadeOutMs, bool reverse,
                     int32_t playbackMode, int32_t chokeGroup) {
@@ -128,6 +142,7 @@ public:
         mChokeGroup.store(chokeGroup, std::memory_order_relaxed);
     }
 
+    /** AUDIO THREAD ONLY — see file header. extraSemitones is for Chromatic Instrument Mode. */
     void trigger(float velocity, int32_t extraSemitones) {
         if (!mLoaded.load(std::memory_order_relaxed)) return;
 
@@ -159,6 +174,7 @@ public:
         mActive.store(true, std::memory_order_relaxed);
     }
 
+    /** AUDIO THREAD ONLY. Only affects HOLD_TO_PLAY; other modes ignore release. */
     void release() {
         mHeld = false;
         if (mPlaybackMode.load(std::memory_order_relaxed) == static_cast<int32_t>(PlaybackMode::HOLD_TO_PLAY)) {
@@ -166,6 +182,7 @@ public:
         }
     }
 
+    /** AUDIO THREAD ONLY. Immediate stop with a short release fade (choke groups, explicit stop). */
     void choke() {
         if (mActive.load(std::memory_order_relaxed)) {
             mReleasing = true;
@@ -173,6 +190,7 @@ public:
         }
     }
 
+    /** Audio thread. Allocation-free. Accumulates (+=) into outBuffer. */
     void render(float* outBuffer, int32_t numFrames, int32_t channelCount) {
         if (!mActive.load(std::memory_order_relaxed)) return;
         const float* data = mBuffer.load(std::memory_order_acquire);
@@ -253,7 +271,7 @@ private:
     std::atomic<int32_t> mPlaybackMode{0};
     std::atomic<int32_t> mChokeGroup{0};
 
-    // Audio-thread Playback State
+    // Audio-thread-only playback state.
     std::atomic<bool> mActive{false};
     bool mHeld{false};
     bool mReleasing{false};

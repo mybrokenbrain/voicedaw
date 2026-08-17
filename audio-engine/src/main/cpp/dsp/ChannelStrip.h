@@ -1,4 +1,22 @@
 #pragma once
+/**
+ * ChannelStrip.h — Per-track DSP chain: gain → EQ → compressor → send level.
+ *
+ * Signal path:
+ *   Input -> Gain/Pan -> ParametricEQ -> Compressor -> MainOut
+ *                                                 \-> ReverbSend -> shared Reverb bus
+ *                                                 \-> DelaySend  -> shared Delay bus
+ *
+ * Processing occurs in two phases:
+ *   1. renderPreComp(): applies mute/solo, gain/pan, and EQ.
+ *   2. applyPostComp(): evaluates compression (supporting sidechain from any
+ *      track buffer) and routes to sends.
+ *
+ * Automation: volume and EQ mid-gain can be automated via setVolumeDb()
+ * and setEqMidGain() on the audio thread.
+ *
+ * RULES (A-09): No heap allocation after configure(). Lock-free.
+ */
 
 #include <atomic>
 #include <cmath>
@@ -20,22 +38,27 @@ public:
         mComp.configure(sampleRate);
     }
 
+    // ── Main-thread controls ──────────────────────────────────────────────────
     void setVolumeDb(float db)  { mVolumeDb.store(db,  std::memory_order_relaxed); }
-    void setPanNorm(float pan)  { mPan.store(pan,      std::memory_order_relaxed); }
+    void setPanNorm(float pan)  { mPan.store(pan,      std::memory_order_relaxed); }  // -1..+1
     void setMuted(bool m)       { mMuted.store(m,      std::memory_order_relaxed); }
     void setSoloed(bool s)      { mSoloed.store(s,     std::memory_order_relaxed); }
-    void setReverbSend(float v) { mReverbSend.store(v, std::memory_order_relaxed); }
-    void setDelaySend(float v)  { mDelaySend.store(v, std::memory_order_relaxed); }
+    void setReverbSend(float v) { mReverbSend.store(v, std::memory_order_relaxed); }  // 0..1
+    void setDelaySend(float v)  { mDelaySend.store(v, std::memory_order_relaxed); }   // 0..1
 
+    // Sidechain state
     void setSidechainEnabled(bool e) { mSidechainEnabled.store(e, std::memory_order_relaxed); }
     void setSidechainSource(int32_t s) { mSidechainSource.store(s, std::memory_order_relaxed); }
     bool isSidechainEnabled() const { return mSidechainEnabled.load(std::memory_order_relaxed); }
     int32_t getSidechainSource() const { return mSidechainSource.load(std::memory_order_relaxed); }
 
+    // Submix bus routing — busId matches SubmixBus.kt: 0=Master, 1=Drum, 2=Vocal, 3=Instrument.
     void setTargetBus(int32_t busId) { mTargetBus.store(busId, std::memory_order_relaxed); }
     int32_t getTargetBus() const { return mTargetBus.load(std::memory_order_relaxed); }
 
+    // EQ delegates
     ParametricEq& eq() { return mEq; }
+    // Compressor delegates
     Compressor& comp() { return mComp; }
 
     float getVolumeDb()    const { return mVolumeDb.load(std::memory_order_relaxed); }
@@ -45,6 +68,13 @@ public:
     float getReverbSend()  const { return mReverbSend.load(std::memory_order_relaxed); }
     float getGainReductionDb() const { return mComp.getGainReductionDb(); }
 
+    // ── Audio-thread render, phase 1 ──────────────────────────────────────────
+    /**
+     * Applies mute/solo, gain/pan, EQ. Leaves the pre-compressor signal in
+     * buffer[]. Call this for every track BEFORE calling applyPostComp() on
+     * ANY track, so that any track's buffer is available as a sidechain
+     * source regardless of processing order.
+     */
     void renderPreComp(float* buffer, int32_t numFrames, bool anySoloed) {
         bool muted  = mMuted.load(std::memory_order_relaxed);
         bool soloed = mSoloed.load(std::memory_order_relaxed);
@@ -68,6 +98,13 @@ public:
         mEq.process(buffer, numFrames, mChannelCount);
     }
 
+    // ── Audio-thread render, phase 2 ──────────────────────────────────────────
+    /**
+     * Fills reverbSendOut[]/delaySendOut[] from the phase-1 buffer, then
+     * compresses buffer[] in place. sidechainBuffer, if provided, must be
+     * another track's phase-1 (pre-comp) buffer — never the partially-summed
+     * master bus.
+     */
     void applyPostComp(float* buffer, float* reverbSendOut, float* delaySendOut,
                         int32_t numFrames, bool anySoloed, const float* sidechainBuffer = nullptr) {
         bool muted  = mMuted.load(std::memory_order_relaxed);
@@ -77,7 +114,7 @@ public:
         if (muted) {
             if (reverbSendOut) std::memset(reverbSendOut, 0, sizeof(float) * numFrames * mChannelCount);
             if (delaySendOut) std::memset(delaySendOut, 0, sizeof(float) * numFrames * mChannelCount);
-            return;
+            return; // buffer already zeroed by renderPreComp()
         }
 
         float rSend = mReverbSend.load(std::memory_order_relaxed);
@@ -106,7 +143,7 @@ private:
 
     std::atomic<bool> mSidechainEnabled{false};
     std::atomic<int32_t> mSidechainSource{-1};
-    std::atomic<int32_t> mTargetBus{0};
+    std::atomic<int32_t> mTargetBus{0}; // 0 = Master
 };
 
 } // namespace voicedaw

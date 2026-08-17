@@ -26,7 +26,7 @@ fun VocalPadScreen(engineVm: AudioEngineViewModel) {
     val perfState by engineVm.performanceFxState.collectAsState()
     val context = LocalContext.current
     var editingPad by remember { mutableStateOf<PadSampleData?>(null) }
-    var activeTab by remember { mutableIntStateOf(0) }
+    var activeTab by remember { mutableIntStateOf(0) } // 0 = Pads, 1 = Performance FX
     
     var selectedPadForLoad by remember { mutableStateOf<Int?>(null) }
     val launcher = rememberLauncherForActivityResult(

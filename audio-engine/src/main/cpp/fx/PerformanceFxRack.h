@@ -1,5 +1,15 @@
 #pragma once
-
+/**
+ * PerformanceFxRack.h — Touch-hold performance FX for live manipulation.
+ *
+ * Supported FX types:
+ *  - BITCRUSH: Sample rate reduction and bit reduction.
+ *  - SILENCE_CUT: Instant mute while pressed.
+ *  - DISTORTION_BOOST: Soft-clipping overdrive.
+ *  - TAPE_STOP: Pitch / rate deceleration envelope.
+ *  - STUTTER_8TH / STUTTER_16TH / STUTTER_32ND: Buffer capture and repeating loop.
+ *  - FILTER_LP_SWEEP / FILTER_HP_SWEEP: Swept low-pass and high-pass filters.
+ */
 
 #include <atomic>
 #include <cmath>
@@ -25,6 +35,7 @@ public:
         mActiveFx.store(fxType, std::memory_order_relaxed);
         mPhase = 0.0f;
 
+        // Stutter: (re)arm capture for a fresh loop each time the pad is pressed.
         if (fxType == 0 || fxType == 1 || fxType == 2) {
             float durSec = (fxType == 0) ? 0.25f : (fxType == 1) ? 0.125f : 0.0625f;
             int32_t loopLen = static_cast<int32_t>(mSampleRate * durSec);
@@ -34,6 +45,7 @@ public:
             mStutterCaptured = false;
         }
 
+        // Filter sweep: reset one-pole state each activation.
         if (fxType == 4 || fxType == 5) {
             mFilterState[0] = 0.0f;
             mFilterState[1] = 0.0f;
@@ -50,6 +62,8 @@ public:
                 case 0: case 1: case 2: // STUTTER_8TH / 16TH / 32ND
                 {
                     if (!mStutterCaptured) {
+                        // Still filling the loop buffer — pass audio through
+                        // live while capturing it.
                         for (int c = 0; c < channelCount && c < 2; ++c) {
                             mStutterBuffer[mStutterWritePos * 2 + c] = buffer[i * channelCount + c];
                         }
@@ -77,10 +91,11 @@ public:
                 }
                 case 4: case 5: // FILTER_LP_SWEEP / FILTER_HP_SWEEP
                 {
+                    // Sweep cutoff over ~1s: LP goes bright->dark, HP goes dark->bright.
                     float sweepT = std::min(1.0f, mSweepElapsedFrames / (mSampleRate * 1.0f));
                     float cutoffHz = (fx == 4)
-                        ? (8000.0f - sweepT * 7800.0f)
-                        : (200.0f + sweepT * 7800.0f);
+                        ? (8000.0f - sweepT * 7800.0f)   // LP: 8kHz -> 200Hz
+                        : (200.0f + sweepT * 7800.0f);   // HP: 200Hz -> 8kHz
                     cutoffHz = std::max(20.0f, std::min(cutoffHz, mSampleRate * 0.45f));
                     float alpha = std::exp(-2.0f * static_cast<float>(M_PI) * cutoffHz / mSampleRate);
 
@@ -118,7 +133,9 @@ public:
                     break;
                 }
                 default:
-                    // TODO: Not implemented
+                    // REVERB_BURST(7), PITCH_DROP(8), PITCH_RISE(9),
+                    // CHORUS_FLANGE(10), VINYL_CRACKLE(11), DELAY_FREEZE(12),
+                    // GATED_REVERB(13) — genuinely not implemented yet.
                     break;
             }
         }
@@ -131,14 +148,14 @@ private:
     std::atomic<int32_t> mActiveFx{-1};
     float mPhase{0.0f};
 
-    // Stutter
+    // Stutter state
     float mStutterBuffer[kMaxStutterFrames * 2]{};
     int32_t mStutterLoopLenFrames{0};
     int32_t mStutterWritePos{0};
     int32_t mStutterReadPos{0};
     bool mStutterCaptured{false};
 
-    // Filter sweep
+    // Filter sweep state
     float mFilterState[2]{0.0f, 0.0f};
     int64_t mSweepElapsedFrames{0};
 };

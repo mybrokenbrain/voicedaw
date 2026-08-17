@@ -1,4 +1,15 @@
 #pragma once
+/**
+ * MixerGraph.h — N-track to stereo summing bus.
+ *
+ * Topology:
+ *  - Polyphonic SynthVoices and DrumVoices
+ *  - PadPlayerPool for 16-pad vocal grid / sampler
+ *  - Per-track ChannelStrip (gain/pan, EQ, compressor, sidechain routing, sends)
+ *  - Submix buses (Master, Drum, Vocal, Instrument)
+ *  - Master FX insert chain (Saturation -> Master Delay -> NoiseGate) -> Reverb -> Mastering
+ *  - Performance FX rack (touch-hold stutters, tape stop, filters, distortion, bitcrush)
+ */
 
 #include <cstdint>
 #include <vector>
@@ -24,10 +35,13 @@ public:
     MixerGraph();
     ~MixerGraph() = default;
 
+    // Called from main thread before stream starts — safe to allocate here
     void configure(int32_t sampleRate, int32_t channelCount);
 
+    // Called from audio thread — MUST be allocation-free
     void render(float* outputBuffer, int32_t numFrames, int32_t channelCount);
 
+    // ── MIDI instrument (M4) ─────────────────────────────────────────────────
     void postNoteEvent(int32_t midiNote, int32_t velocity);
     void postPitchBend(int32_t midiNote, float bendSemis);
     void allNotesOff();
@@ -48,10 +62,12 @@ public:
     void setTransportState(TransportClock::State state);
     void loadTrackClip(int32_t trackIndex, const std::string& path);
 
+    // M5/Phase 3 Mastering
     void setListenToReference(bool listen) { mListenToReference = listen; }
     void loadReferenceTrack(const std::string& path);
     MasteringModule* getMastering() const { return mMastering.get(); }
 
+    // ── M7: Master bus FX chain ──────────────────────────────────────────────
     void setMasterSaturationEnabled(bool enabled) { mMasterSaturationEnabled = enabled; }
     void setMasterSaturationDrive(float drive) { mMasterSaturation.setDrive(drive); }
 
@@ -69,12 +85,14 @@ public:
         mPerformanceFx.setFx(fxType, hold);
     }
 
+    // busId: 0=Master, 1=Drum, 2=Vocal, 3=Instrument (see SubmixBus.kt)
     void setTrackSubmixBus(int32_t trackIndex, int32_t busId) {
         if (trackIndex >= 0 && trackIndex < kMaxTracks && busId >= 0 && busId < kNumBuses) {
             mTracks[trackIndex].setTargetBus(busId);
         }
     }
 
+    // ── Vocal Pad Grid / Sampler ───────────────────────────────────────────
     bool loadPadSample(int32_t padIndex, const std::string& path) {
         return mPadPlayers.loadSample(padIndex, path);
     }
@@ -94,43 +112,54 @@ public:
 private:
     static constexpr int32_t kMaxVoices          = 16;
     static constexpr int32_t kMaxDrumVoices      = 4;
-    static constexpr int32_t kMaxTracks = 5;
+    static constexpr int32_t kMaxTracks          = 5; // 4 audio tracks + 1 synth track (M5)
     static constexpr int32_t kMaxFramesPerCallback = 2048;
-    static constexpr int32_t kNumBuses           = 4;
+    static constexpr int32_t kNumBuses           = 4; // Master, Drum, Vocal, Instrument
 
     int32_t mSampleRate{48000};
     int32_t mChannelCount{2};
     bool    mConfigured{false};
 
-    // Voice Pool
+    // ── Polyphonic voice pool (M4 built-in instrument) ───────────────────────
     SynthVoice mVoices[kMaxVoices];
     DrumVoice mDrumVoices[kMaxDrumVoices];
 
     RingBuffer<NoteEvent, 256> mNoteQueue;
 
-    // Scratch Buffer
+    // ── Pre-allocated scratch buffer (zero alloc in render()) ────────────────
     float mScratchBuffer[kMaxFramesPerCallback]{};
     float mReverbSendBuffer[kMaxFramesPerCallback * 2]{};
     float mReverbBusBuffer[kMaxFramesPerCallback * 2]{};
     float mDelaySendBuffer[kMaxFramesPerCallback * 2]{};
     float mDelayBusBuffer[kMaxFramesPerCallback * 2]{};
 
+    // Per-track pre-compressor buffers — rendered in render()'s phase 1 so
+    // that phase 2 (compression, incl. sidechain) can read any track's
+    // isolated signal regardless of processing order. Also holds each
+    // track's final post-comp output, since applyPostComp() writes in place.
     float mPreCompBuffers[kMaxTracks][kMaxFramesPerCallback * 2]{};
 
+    // Submix bus accumulation. Index 0 (Master) is unused — Master-bus
+    // tracks sum straight into outputBuffer. Indices 1..3 correspond to
+    // busId 1..3 (Drum/Vocal/Instrument).
     float mBusBuffers[kNumBuses][kMaxFramesPerCallback * 2]{};
 
-    // M5 Mixer Components
+    // ── M5 Mixer Components ──────────────────────────────────────────────────
     ChannelStrip mTracks[kMaxTracks];
     Reverb mReverb;
     TransportClock mTransport;
     AudioClipPlayer mClipPlayers[kMaxTracks];
 
-    // Phase 3 Mastering
+    // ── Phase 3 Mastering ────────────────────────────────────────────────────
     std::unique_ptr<MasteringModule> mMastering;
     AudioClipPlayer mReferencePlayer;
     bool mListenToReference{false};
 
-    // Master Bus FX
+    // ── M7 Master bus FX chain (post-reverb, pre-mastering) ──────────────────
+    // Saturation has no sample-rate dependency, so it's a direct member.
+    // Delay/NoiseGate size internal buffers/coefficients from sampleRate at
+    // construction time, so they must be (re)constructed in configure() once
+    // the real device sample rate is known — NOT default-constructed here.
     fx::Saturation mMasterSaturation;
     std::unique_ptr<fx::Delay> mMasterDelay;
     std::unique_ptr<fx::NoiseGate> mMasterGate;

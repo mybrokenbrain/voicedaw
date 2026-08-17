@@ -1,4 +1,13 @@
-
+/**
+ * AudioEngineJni.cpp — JNI bridge between Kotlin and the C++ AudioEngine.
+ *
+ * DESIGN: The JNI layer is kept intentionally thin.
+ * - All logic lives in AudioEngine.cpp / MixerGraph.cpp
+ * - JNI methods just forward to AudioEngine methods and marshal types
+ * - No audio processing happens in this file
+ *
+ * Kotlin package: com.voicedaw.audioengine.AudioEngineJni
+ */
 
 #include <jni.h>
 #include <cstdint>
@@ -14,7 +23,7 @@
 
 using voicedaw::AudioEngine;
 
-// Helper
+// ─── Helper: convert native pointer stored as jlong ───────────────────────────
 
 static AudioEngine* nativeHandle(jlong handle) {
     return reinterpret_cast<AudioEngine*>(handle);
@@ -22,7 +31,7 @@ static AudioEngine* nativeHandle(jlong handle) {
 
 extern "C" {
 
-// Native methods
+// ── com.voicedaw.audioengine.AudioEngineJni native methods ────────────────────
 
 JNIEXPORT jlong JNICALL
 Java_com_voicedaw_audioengine_AudioEngineJni_nativeCreate(JNIEnv* /*env*/, jclass /*clazz*/) {
@@ -116,7 +125,7 @@ Java_com_voicedaw_audioengine_AudioEngineJni_nativeGetLastDetectedPad(
     return nativeHandle(handle)->getLastDetectedPad();
 }
 
-// Harmony & Tempo
+// ── Harmony & Tempo (M4) ──────────────────────────────────────────────────
 JNIEXPORT void JNICALL
 Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetHarmonyAssistEnabled(JNIEnv *env, jclass clazz, jlong handle, jboolean enabled) {
     auto* engine = reinterpret_cast<voicedaw::AudioEngine*>(handle);
@@ -138,7 +147,7 @@ Java_com_voicedaw_audioengine_AudioEngineJni_nativeGetEstimatedKeyIsMajor(JNIEnv
     return engine ? engine->getEstimatedKeyIsMajor() : true;
 }
 
-// Optimization & Stabilization
+// ── Optimization & Stabilization (M6) ─────────────────────────────────────
 JNIEXPORT void JNICALL
 Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetPerformanceTier(JNIEnv *env, jclass clazz, jlong handle, jint tier) {
     auto* engine = reinterpret_cast<voicedaw::AudioEngine*>(handle);
@@ -151,7 +160,7 @@ Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetOutputDeviceId(
     if (handle) nativeHandle(handle)->setOutputDeviceId(deviceId);
 }
 
-// Note Events
+// ── Note Events ──────────────────────────────────────────────────────────
 JNIEXPORT void JNICALL
 Java_com_voicedaw_audioengine_AudioEngineJni_nativeNoteOn(
     JNIEnv* /*env*/, jclass /*clazz*/, jlong handle, jint midiNote, jint velocity)
@@ -170,10 +179,10 @@ JNIEXPORT void JNICALL
 Java_com_voicedaw_audioengine_AudioEngineJni_nativeAllNotesOff(
     JNIEnv* /*env*/, jclass /*clazz*/, jlong handle)
 {
-    if (handle) nativeHandle(handle)->allNotesOff();
+    if (handle) nativeHandle(handle)->getMixerGraph().allNotesOff();
 }
 
-// Mixer / Track
+// ── Mixer / Track (M5) ────────────────────────────────────────────────────
 JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetTransportState(JNIEnv*, jclass, jlong handle, jint state) {
     nativeHandle(handle)->getMixerGraph().setTransportState(static_cast<voicedaw::TransportClock::State>(state));
 }
@@ -211,7 +220,7 @@ JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetPer
     nativeHandle(handle)->getMixerGraph().setPerformanceFx(fxType, hold);
 }
 
-// EQ
+// ── EQ (M5) ───────────────────────────────────────────────────────────────
 JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetEqEnabled(JNIEnv*, jclass, jlong handle, jint trackIndex, jboolean enabled) {
     nativeHandle(handle)->getMixerGraph().getTrack(trackIndex).eq().setEnabled(enabled);
 }
@@ -228,7 +237,7 @@ JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetEqH
     eq.setHighShelfFreq(freq); eq.setHighShelfGain(gain);
 }
 
-// Compressor
+// ── Compressor (M5) ───────────────────────────────────────────────────────
 JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetCompEnabled(JNIEnv*, jclass, jlong handle, jint trackIndex, jboolean enabled) {
     nativeHandle(handle)->getMixerGraph().getTrack(trackIndex).comp().setEnabled(enabled);
 }
@@ -240,7 +249,7 @@ JNIEXPORT jfloat JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeGetC
     return nativeHandle(handle)->getMixerGraph().getTrack(trackIndex).getGainReductionDb();
 }
 
-// Master Reverb
+// ── Master Reverb (M5) ────────────────────────────────────────────────────
 JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetReverbEnabled(JNIEnv*, jclass, jlong handle, jboolean enabled) {
     nativeHandle(handle)->getMixerGraph().getReverb().setEnabled(enabled);
 }
@@ -249,7 +258,7 @@ JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetRev
     rev.setRoomSize(room); rev.setDamping(damp); rev.setWetDry(wetDry); rev.setWidth(width);
 }
 
-// Master FX Chain
+// ── Master FX Chain (M7) ───────────────────────────────────────────────────
 JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetMasterSaturationEnabled(JNIEnv*, jclass, jlong handle, jboolean enabled) {
     nativeHandle(handle)->getMixerGraph().setMasterSaturationEnabled(enabled);
 }
@@ -269,7 +278,7 @@ JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeSetMas
     nativeHandle(handle)->getMixerGraph().setMasterGateParams(thresholdDb, attackMs, releaseMs);
 }
 
-// Export
+// ── Export (M6) ───────────────────────────────────────────────────────────
 JNIEXPORT jboolean JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeBounceToWav(JNIEnv* env, jclass, jlong handle, jstring pathStr) {
     auto* engine = nativeHandle(handle);
     const char* path = env->GetStringUTFChars(pathStr, nullptr);
@@ -282,6 +291,7 @@ JNIEXPORT jboolean JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeBo
     
     totalFrames += sampleRate; // 1s tail
     
+    // Stop engine for offline render
     engine->stop();
     mixer.resetForOfflineRender();
 
@@ -306,7 +316,7 @@ JNIEXPORT jboolean JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeBo
     return success;
 }
 
-// Mastering
+// ── Phase 3 Mastering ───────────────────────────────────────────────────────
 JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeLoadReferenceTrack(JNIEnv* env, jclass, jlong handle, jstring pathStr) {
     const char* path = env->GetStringUTFChars(pathStr, nullptr);
     nativeHandle(handle)->getMixerGraph().loadReferenceTrack(std::string(path));
@@ -373,7 +383,7 @@ JNIEXPORT void JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeLoadBe
     env->ReleaseStringUTFChars(path, cPath);
 }
 
-// Vocal Pad Grid
+// ── Vocal Pad Grid Native Bindings ──────────────────────────────────────────
 JNIEXPORT jboolean JNICALL Java_com_voicedaw_audioengine_AudioEngineJni_nativeLoadPadSample(JNIEnv* env, jclass, jlong handle, jint padIndex, jstring pathStr) {
     const char* path = env->GetStringUTFChars(pathStr, nullptr);
     bool ok = nativeHandle(handle)->getMixerGraph().loadPadSample(padIndex, std::string(path));
