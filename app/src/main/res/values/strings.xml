@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#0A0A0F</color>
+    <color name="ic_launcher_foreground">#00E5FF</color>
+    <string name="app_name">Voice DAW</string>
+</resources>

@@ -1,0 +1,33 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+*.jks
+**/build/
+.kotlin/
+
+# Archive
+.archive/
+.git.bak/
+
+# AI agent / tool configs
+.superpowers/
+.agents/
+.gemini/
+.cursor/
+.cursorrules
+.cursorignore
+.copilot/
+.claude/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.aider*
+.windsurfrules
+.codeium/
+NewFiles/
